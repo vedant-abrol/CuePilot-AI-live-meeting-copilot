@@ -4,6 +4,15 @@ An AI meeting copilot web app. Listens to your mic, transcribes live, and surfac
 
 Built for the TwinMind Live Suggestions assignment.
 
+## Live app and repository
+
+- **Production (Vercel):** [https://cue-pilot-ai-live-meeting-copilot.vercel.app](https://cue-pilot-ai-live-meeting-copilot.vercel.app)
+- **Source code:** [https://github.com/vedant-abrol/CuePilot-AI-live-meeting-copilot](https://github.com/vedant-abrol/CuePilot-AI-live-meeting-copilot)
+
+Paste your **Groq API key** in **Settings** on the deployed site (or locally). The key lives only in the browser; it is not stored in Vercel environment variables for this app.
+
+**CI / deploys:** With the default Vercel–GitHub integration, **pushes to `main` trigger a new production deployment**. Check the Vercel project’s **Deployments** tab for build logs and the live URL.
+
 ## Stack
 
 - Next.js 14 (App Router) + React 18 + TypeScript
@@ -61,6 +70,8 @@ Slot taxonomy (5 types):
 
 Why single-call instead of planner→generator? Groq's free tier occasionally spikes per-call latency to 10–20s. Two sequential JSON calls made the refresh unusable in long meetings. Inlining the planner heuristics into the generator's user message gave us the same "right mix at the right time" behavior at half the latency.
 
+JSON completions use a generous `max_tokens` budget so `response_format: json_object` can finish; Groq may return `json_validate_failed` if the model truncates mid-object (mitigated in code with fallbacks and concise-field prompts).
+
 The response is **Zod-validated**, then passed through:
 
 - A **shape coercer** (GPT-OSS sometimes wraps the cards under `{batch: {cards:…}}`, `{suggestions:…}`, a bare array, etc. — all normalized to `{cards: […]}`).
@@ -89,7 +100,7 @@ Whisper hallucinations are a known problem on silent or noisy chunks ("Thank you
 2. **Per-segment filter** — we request `verbose_json` and drop segments with `no_speech_prob > 0.6`, `avg_logprob < -1.0`, or `compression_ratio > 2.4`.
 3. **Phrase + repetition filter** — a stop-list for known hallucination phrases (only when they're the entire output), plus a bigram-repetition detector that catches "word word word word" loops.
 
-Manual refresh flushes the current in-flight slice via `MediaRecorder.requestData()`, transcribes it, then re-runs the suggestion pipeline.
+Manual refresh ends the in-flight `MediaRecorder` slice early, transcribes that audio, then re-runs the suggestion pipeline (so new suggestions follow the new transcript text).
 
 ## Prompt strategy & tradeoffs
 
