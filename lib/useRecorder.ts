@@ -11,6 +11,8 @@ export interface RecorderChunk {
 export interface UseRecorderOpts {
   timesliceMs: number;
   onChunk: (chunk: RecorderChunk) => void | Promise<void>;
+  /** Fired when a slice ends without a transcribable blob (empty, too small, or silence-gated). */
+  onChunkSkipped?: () => void;
   onError?: (err: Error) => void;
   // RMS level at which we consider the chunk "speech". Tuned empirically for
   // a getUserMedia stream with browser's built-in noiseSuppression + AGC on:
@@ -214,7 +216,11 @@ export function useRecorder(opts: UseRecorderOpts) {
               mime: mime || "audio/webm",
             });
           } catch {}
+        } else {
+          optsRef.current.onChunkSkipped?.();
         }
+      } else {
+        optsRef.current.onChunkSkipped?.();
       }
     };
     rec.start();

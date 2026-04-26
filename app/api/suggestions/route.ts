@@ -258,13 +258,6 @@ export async function POST(req: NextRequest) {
         cards = cardsFromRaw(batch);
       } else {
         lastError = describeParseFailure(raw);
-        console.warn(
-          "[suggestions] schema miss on first call.",
-          "\n  error:",
-          lastError,
-          "\n  raw:",
-          rawPreview,
-        );
         const repairRaw = await groqChatJSON<unknown>({
           apiKey,
           model: settings.suggestionModel,
@@ -280,10 +273,6 @@ export async function POST(req: NextRequest) {
         if (repairedBatch) {
           cards = cardsFromRaw(repairedBatch);
         } else {
-          console.warn(
-            "[suggestions] schema miss on repair call. raw:",
-            safePreview(repairRaw),
-          );
           lastError = "schema-miss-after-repair: " + describeParseFailure(repairRaw);
         }
       }
@@ -327,17 +316,13 @@ export async function POST(req: NextRequest) {
                 cards = freshCards;
               }
             }
-          } catch (e) {
-            console.warn(
-              "[suggestions] dedupe retry failed, keeping original batch:",
-              e instanceof Error ? e.message : "unknown",
-            );
+          } catch {
+            /* keep original batch on dedupe retry failure */
           }
         }
       }
     } catch (e) {
       lastError = e instanceof Error ? e.message : "unknown";
-      console.error("[suggestions] call failed:", lastError);
     }
 
     if (!cards) {

@@ -60,10 +60,16 @@ export function LiveSuggestionsPanel({
 
       <div className="flex items-center justify-between gap-3 border-b border-bg-border px-4 py-2 text-xs">
         <button
-          onClick={orchestrator.manualRefresh}
-          disabled={isGeneratingSuggestions}
-          className="rounded-md border border-bg-border bg-bg-raised px-3 py-1.5 text-[11px] font-medium hover:bg-bg-border disabled:opacity-50"
-          title="Flush current audio, then refresh suggestions (R)"
+          type="button"
+          onClick={() => {
+            void orchestrator.manualRefresh();
+          }}
+          aria-busy={isGeneratingSuggestions}
+          className={
+            "rounded-md border border-bg-border bg-bg-raised px-3 py-1.5 text-[11px] font-medium hover:bg-bg-border active:scale-[0.98] " +
+            (isGeneratingSuggestions ? "opacity-90" : "")
+          }
+          title="Flush current audio, then refresh suggestions (R). While refreshing, click again to queue another round; after 20s the next click aborts and retries."
         >
           {isGeneratingSuggestions ? "refreshing…" : "↻ Reload suggestions"}
         </button>

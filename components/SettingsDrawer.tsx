@@ -201,7 +201,7 @@ export function SettingsDrawer() {
             <div className="space-y-5">
               <PromptField
                 label="Moment planner (system)"
-                hint="Picks the 3 slot types for the next batch based on the current moment."
+                hint="Heuristic rules here are inlined into each suggestion request (single-pass generation). Edit to tune slot choice and mix."
                 value={settings.plannerSystemPrompt}
                 defaultValue={DEFAULT_SETTINGS.plannerSystemPrompt}
                 onChange={(v) => updateSettings({ plannerSystemPrompt: v })}

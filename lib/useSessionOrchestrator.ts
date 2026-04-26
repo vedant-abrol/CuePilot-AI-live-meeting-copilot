@@ -55,6 +55,8 @@ export function useSessionOrchestrator() {
   const suggestionStartedAtRef = useRef<number>(0);
   const briefInFlightRef = useRef<boolean>(false);
   const briefAbortRef = useRef<AbortController | null>(null);
+  /** After ↻ while recording, run suggestions only after the flushed slice is transcribed (or skipped). */
+  const pendingManualRefreshRef = useRef(false);
 
   const shouldRunBrief = useCallback((): boolean => {
     const s = useSessionStore.getState();
@@ -131,15 +133,15 @@ export function useSessionOrchestrator() {
         // abort() can synchronously throw in some polyfills; fine to ignore.
       }
     }, SUGGESTION_HARD_TIMEOUT_MS);
-    useSessionStore.getState().setGeneratingSuggestions(true);
-    useSessionStore.getState().setError(null);
-    const startedAt = performance.now();
-    const snap = useSessionStore.getState();
-    const tail = transcriptTail(
-      snap.transcript,
-      snap.settings.suggestionContextChars,
-    );
     try {
+      useSessionStore.getState().setGeneratingSuggestions(true);
+      useSessionStore.getState().setError(null);
+      const startedAt = performance.now();
+      const snap = useSessionStore.getState();
+      const tail = transcriptTail(
+        snap.transcript,
+        snap.settings.suggestionContextChars,
+      );
       const resp = await callSuggestions({
         apiKey: snap.settings.apiKey,
         settings: {
@@ -201,10 +203,15 @@ export function useSessionOrchestrator() {
         s.setError(
           "Paste your Groq API key in Settings to transcribe audio.",
         );
+        if (pendingManualRefreshRef.current) {
+          pendingManualRefreshRef.current = false;
+          void runSuggestions();
+        }
         return;
       }
       s.setTranscribing(true);
       s.setError(null);
+      let addedTranscript = false;
       try {
         const result = await callTranscribe({
           apiKey: s.settings.apiKey,
@@ -212,34 +219,44 @@ export function useSessionOrchestrator() {
           blob: audio.blob,
           continuationPrompt: whisperContinuation(s.transcript),
         });
-        if (!result.text) return;
-        const chunk = useSessionStore.getState().addTranscriptChunk({
-          t: Date.now(),
-          durationMs: result.durationMs || audio.durationMs,
-          text: result.text,
-          source: "mic",
-        });
-        const wantBrief = shouldRunBrief();
-        // Fire-and-forget. We do NOT await suggestions here: a round can take
-        // 15–40s, while new audio chunks arrive every ~20s. Awaiting would
-        // block the transcription pipeline and, combined with abort-on-new-
-        // chunk, would cause the "refreshing…" spinner to be permanent.
-        if (useSessionStore.getState().settings.autoRefresh) {
-          void runSuggestions();
+        if (result.text) {
+          addedTranscript = true;
+          const chunk = useSessionStore.getState().addTranscriptChunk({
+            t: Date.now(),
+            durationMs: result.durationMs || audio.durationMs,
+            text: result.text,
+            source: "mic",
+          });
+          const wantBrief = shouldRunBrief();
+          if (wantBrief) void runBrief(chunk);
         }
-        if (wantBrief) void runBrief(chunk);
       } catch (e) {
         useSessionStore.getState().setError((e as Error).message);
       } finally {
         useSessionStore.getState().setTranscribing(false);
+        const st = useSessionStore.getState();
+        if (pendingManualRefreshRef.current) {
+          pendingManualRefreshRef.current = false;
+          void runSuggestions();
+        } else if (addedTranscript && st.settings.autoRefresh) {
+          void runSuggestions();
+        }
       }
     },
     [runBrief, runSuggestions, shouldRunBrief],
   );
 
+  const onChunkSkipped = useCallback(() => {
+    if (pendingManualRefreshRef.current) {
+      pendingManualRefreshRef.current = false;
+      void runSuggestions();
+    }
+  }, [runSuggestions]);
+
   const recorder = useRecorder({
     timesliceMs: state.settings.chunkSeconds * 1000,
     onChunk: handleChunk,
+    onChunkSkipped,
     onError: (err) => {
       useSessionStore.getState().setError(err.message || "Microphone error");
     },
@@ -309,7 +326,12 @@ export function useSessionOrchestrator() {
 
   const manualRefresh = useCallback(async () => {
     const s = useSessionStore.getState();
-    if (s.isRecording) recorder.flushNow();
+    let willFlush = false;
+    if (s.isRecording && !s.settings.demoMode) {
+      willFlush = true;
+      pendingManualRefreshRef.current = true;
+      recorder.flushNow();
+    }
     if (s.settings.demoMode && !demoTimerRef.current) {
       startDemoMode();
       return;
@@ -332,6 +354,11 @@ export function useSessionOrchestrator() {
       }
       // Otherwise just coalesce — a follow-up round is already scheduled.
       suggestionStaleRef.current = true;
+      return;
+    }
+    if (willFlush) {
+      // Suggestions run after the flushed slice is transcribed (or skipped) in
+      // handleChunk / onChunkSkipped.
       return;
     }
     await runSuggestions();
