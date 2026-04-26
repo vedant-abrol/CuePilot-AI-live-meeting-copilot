@@ -14,6 +14,14 @@ import type { MeetingBrief, MeetingType, SuggestionCard } from "@/lib/types";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// Groq JSON mode requires a complete valid object. 1400 out-tokens is often
+// too little for gpt-oss-120B on long context — generation truncates and the
+// API returns json_validate_failed ("max completion tokens reached...").
+const SUGGESTION_MAX_TOKENS = 4096;
+const SUGGESTION_TIMEOUT_MS = 25_000;
+const SUGGESTION_REPAIR_TIMEOUT_MS = 22_000;
+const SUGGESTION_DEDUPE_TIMEOUT_MS = 20_000;
+
 interface Body {
   settings: {
     suggestionModel: string;
@@ -201,6 +209,7 @@ RULES:
 - type MUST be one of: question_to_ask, talking_point, answer, fact_check, clarifying_info.
 - Output EXACTLY 3 cards (no more, no less).
 - Every card MUST have ALL fields: type, preview, expanded_seed, confidence, rationale.
+- Be concise: preview ~1–2 sentences; expanded_seed one tight sentence; rationale one short sentence. Verbose JSON can fail to finish; prioritize completing valid JSON.
 - preview MUST reference something specific from the transcript or brief (names, numbers, terms actually said). Do NOT emit generic filler like "What's the biggest risk?" or "Summarize the core decision."
 - No text outside the JSON object. No trailing commas. No code fences.
 ================`;
@@ -249,8 +258,8 @@ export async function POST(req: NextRequest) {
         system,
         user,
         temperature: 0.6,
-        maxTokens: 1400,
-        timeoutMs: 15000,
+        maxTokens: SUGGESTION_MAX_TOKENS,
+        timeoutMs: SUGGESTION_TIMEOUT_MS,
       });
       rawPreview = safePreview(raw);
       const batch = attemptParseToBatch(raw);
@@ -264,10 +273,10 @@ export async function POST(req: NextRequest) {
           system,
           user:
             user +
-            '\n\nSTRICT REPAIR: Your previous output did not match the contract. Re-emit ONLY the top-level JSON object {"cards":[ {type, preview, expanded_seed, confidence, rationale}, {..}, {..} ]}. Exactly 3 cards, transcript-grounded, no prose, no code fences, no extra keys.',
+            '\n\nSTRICT REPAIR: Your previous output did not match the contract. Re-emit ONLY the top-level JSON object {"cards":[ {type, preview, expanded_seed, confidence, rationale}, {..}, {..} ]}. Exactly 3 cards, transcript-grounded, no prose, no code fences, no extra keys. Keep each string field short.',
           temperature: 0.2,
-          maxTokens: 1400,
-          timeoutMs: 13000,
+          maxTokens: SUGGESTION_MAX_TOKENS,
+          timeoutMs: SUGGESTION_REPAIR_TIMEOUT_MS,
         });
         const repairedBatch = attemptParseToBatch(repairRaw);
         if (repairedBatch) {
@@ -296,13 +305,13 @@ export async function POST(req: NextRequest) {
               system,
               user:
                 user +
-                "\n\nAVOID THESE PREVIOUS PREVIEWS (your last draft overlapped too closely with them — pick genuinely different angles, different card types if needed):\n" +
+                "\n\nAVOID THESE PREVIOUS PREVIEWS (your last draft overlapped too closely with them — pick genuinely different angles, different card types if needed). Keep the JSON compact:\n" +
                 [...recentPreviews, ...dupes]
                   .map((p, i) => `${i + 1}. ${p}`)
                   .join("\n"),
               temperature: 0.7,
-              maxTokens: 1400,
-              timeoutMs: 12000,
+              maxTokens: SUGGESTION_MAX_TOKENS,
+              timeoutMs: SUGGESTION_DEDUPE_TIMEOUT_MS,
             });
             const freshBatch = attemptParseToBatch(freshRaw);
             if (freshBatch) {
